@@ -1,0 +1,1 @@
+gcc -O0 -g -fPIC -shared mlops.c -o libmlops_ml.so -lm
