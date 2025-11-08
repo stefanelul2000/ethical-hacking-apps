@@ -1,6 +1,6 @@
 """
-Security Vulnerability Testing Script - b.py Mitigations
-Tests security mitigations implemented in b.py module
+Security Vulnerability Testing Script - storage_utils.py Mitigations
+Tests security mitigations implemented in storage_utils.py module
 """
 import requests
 from pathlib import Path
@@ -13,10 +13,10 @@ vulnerabilities_found = []
 mitigations_working = []
 
 print("=" * 80)
-print("SECURITY VULNERABILITY TESTING - b.py")
+print("SECURITY VULNERABILITY TESTING - storage_utils.py")
 print("=" * 80)
 print(f"Target: {BASE_URL}")
-print(f"Make sure the server is running: uvicorn a:app --reload")
+print(f"Make sure the server is running: uvicorn main:app --reload")
 print("=" * 80)
 
 # Check if server is running
@@ -28,7 +28,7 @@ try:
     print("✅ Server is running\n")
 except Exception as e:
     print(f"❌ Cannot connect to server: {e}")
-    print("Run: uvicorn a:app --reload")
+    print("Run: uvicorn main:app --reload")
     exit(1)
 
 
