@@ -1,10 +1,20 @@
 from pathlib import Path
+import json
 import re
+import threading
+import time
 import uuid
 
 BASE_DIR = Path(__file__).parent.resolve()
 UPLOAD_DIR = (BASE_DIR / "uploads").resolve()
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+METADATA_FILE = UPLOAD_DIR / "metadata.json"
+
+if not METADATA_FILE.exists():
+    METADATA_FILE.write_text("{}", encoding="utf-8")
+
+_METADATA_LOCK = threading.Lock()
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 SAFE_CHARS_REGEX = re.compile(r"[^A-Za-z0-9_.-]")
@@ -95,3 +105,101 @@ def c(relative_path: str) -> str:
     # MITIGATION: Remove path traversal patterns
     clean = relative_path.replace("../", "").replace("..\\", "").lstrip("/\\")
     return clean
+
+
+def _load_metadata() -> dict:
+    try:
+        with METADATA_FILE.open("r", encoding="utf-8") as handler:
+            return json.load(handler)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _save_metadata(data: dict) -> None:
+    METADATA_FILE.write_text(json.dumps(data), encoding="utf-8")
+
+
+def register_file_record(
+    *,
+    file_id: str,
+    stored_name: str,
+    owner: str,
+    original_name: str,
+    size: int,
+    download_token: str,
+) -> None:
+    with _METADATA_LOCK:
+        metadata = _load_metadata()
+        metadata[file_id] = {
+            "stored_name": stored_name,
+            "owner": owner,
+            "original_name": original_name,
+            "size": size,
+            "download_token": download_token,
+            "uploaded_at": int(time.time()),
+        }
+        _save_metadata(metadata)
+
+
+def get_file_record(file_id: str):
+    with _METADATA_LOCK:
+        metadata = _load_metadata()
+        return metadata.get(file_id)
+
+
+def get_file_record_by_token(token: str):
+    with _METADATA_LOCK:
+        metadata = _load_metadata()
+    for file_id, record in metadata.items():
+        if record.get("download_token") == token:
+            return file_id, record
+    return None, None
+
+
+def remove_file_record(file_id: str) -> None:
+    with _METADATA_LOCK:
+        metadata = _load_metadata()
+        if file_id in metadata:
+            metadata.pop(file_id)
+            _save_metadata(metadata)
+
+
+def get_usage_bytes(owner: str | None = None) -> int:
+    with _METADATA_LOCK:
+        metadata = _load_metadata()
+    if owner is None:
+        return sum(record.get("size", 0) for record in metadata.values())
+    return sum(
+        record.get("size", 0)
+        for record in metadata.values()
+        if record.get("owner") == owner
+    )
+
+
+def cleanup_expired_files(ttl_seconds: int) -> None:
+    if ttl_seconds <= 0:
+        return
+    now = time.time()
+    with _METADATA_LOCK:
+        metadata = _load_metadata()
+        expired_ids = [
+            file_id
+            for file_id, record in metadata.items()
+            if now - record.get("uploaded_at", 0) > ttl_seconds
+        ]
+        for file_id in expired_ids:
+            stored_name = metadata[file_id].get("stored_name")
+            if stored_name:
+                try:
+                    (UPLOAD_DIR / stored_name).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            metadata.pop(file_id, None)
+        if expired_ids:
+            _save_metadata(metadata)
+
+
+def resolve_stored_path(stored_name: str) -> Path:
+    resolved = (UPLOAD_DIR / stored_name).resolve()
+    resolved.relative_to(UPLOAD_DIR)
+    return resolved

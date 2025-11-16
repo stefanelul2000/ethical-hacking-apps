@@ -1,21 +1,38 @@
 import os
-import secrets
 import time
+import uuid
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Optional
+import threading
 
 import aiofiles
 from fastapi import Depends, File, HTTPException, UploadFile, status
 from fastapi.routing import APIRouter
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from storage_utils import M as get_max_size
-from storage_utils import d as get_upload_dir
-from storage_utils import s as sanitize_filename
+from auth_utils import authenticate
+from storage_utils import (
+    M as get_max_size,
+    cleanup_expired_files,
+    d as get_upload_dir,
+    get_usage_bytes,
+    register_file_record,
+    s as sanitize_filename,
+)
 
 router = APIRouter()
 CHUNK_SIZE = 65536
 security = HTTPBasic()
+
+MAX_USER_STORAGE = int(os.getenv("UPLOAD_MAX_STORAGE_PER_USER", 50 * 1024 * 1024))
+MAX_GLOBAL_STORAGE = int(os.getenv("UPLOAD_MAX_STORAGE_GLOBAL", 500 * 1024 * 1024))
+UPLOAD_RATE_WINDOW_SECONDS = int(os.getenv("UPLOAD_RATE_WINDOW_SECONDS", 60))
+UPLOAD_RATE_MAX_REQUESTS = int(os.getenv("UPLOAD_RATE_MAX_REQUESTS", 30))
+UPLOAD_TTL_SECONDS = int(os.getenv("UPLOAD_TTL_SECONDS", 7 * 24 * 3600))
+
+_RATE_LIMIT_STATE: dict[str, deque] = defaultdict(deque)
+_RATE_LIMIT_LOCK = threading.Lock()
 
 ALLOWED_EXTENSIONS = {
     ".txt",
@@ -45,10 +62,6 @@ FILE_SIGNATURES = (
     ("image/gif", b"GIF87a"),
     ("image/gif", b"GIF89a"),
 )
-
-UPLOAD_BASIC_USER = os.getenv("UPLOAD_BASIC_AUTH_USERNAME", "uploader")
-UPLOAD_BASIC_PASSWORD = os.getenv("UPLOAD_BASIC_AUTH_PASSWORD", "upload-secret")
-
 
 def _normalize_content_type(content_type: Optional[str]) -> Optional[str]:
     if not content_type:
@@ -99,14 +112,38 @@ def _enforce_file_type(
         )
 
 
-def _verify_basic_auth(credentials: HTTPBasicCredentials) -> None:
-    username_ok = secrets.compare_digest(credentials.username, UPLOAD_BASIC_USER)
-    password_ok = secrets.compare_digest(credentials.password, UPLOAD_BASIC_PASSWORD)
-    if not (username_ok and password_ok):
+def _enforce_rate_limit(username: str) -> None:
+    if UPLOAD_RATE_MAX_REQUESTS <= 0:
+        return
+    now = time.time()
+    with _RATE_LIMIT_LOCK:
+        bucket = _RATE_LIMIT_STATE[username]
+        while bucket and now - bucket[0] > UPLOAD_RATE_WINDOW_SECONDS:
+            bucket.popleft()
+        if len(bucket) >= UPLOAD_RATE_MAX_REQUESTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Upload rate limit exceeded",
+            )
+        bucket.append(now)
+
+
+def _enforce_storage_quota(
+    *,
+    username: str,
+    user_usage_start: int,
+    global_usage_start: int,
+    bytes_written: int,
+) -> None:
+    if MAX_USER_STORAGE > 0 and user_usage_start + bytes_written > MAX_USER_STORAGE:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Basic"},
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User storage quota exceeded",
+        )
+    if MAX_GLOBAL_STORAGE > 0 and global_usage_start + bytes_written > MAX_GLOBAL_STORAGE:
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail="Global storage quota exceeded",
         )
 
 
@@ -114,15 +151,17 @@ async def upload_file(
     credentials: HTTPBasicCredentials = Depends(security),
     file: UploadFile = File(...),
 ):
-    _verify_basic_auth(credentials)
+    username = authenticate(credentials)
+
+    cleanup_expired_files(UPLOAD_TTL_SECONDS)
+    _enforce_rate_limit(username)
 
     original_name = file.filename or "upload"
     safe_name = sanitize_filename(original_name)
-    destination = get_upload_dir() / safe_name
-
-    if destination.exists():
-        safe_name = f"{destination.stem}_{int(time.time())}{destination.suffix}"
-        destination = get_upload_dir() / safe_name
+    extension = Path(safe_name).suffix.lower() or ".bin"
+    file_id = uuid.uuid4().hex
+    stored_name = f"{file_id}{extension}"
+    destination = get_upload_dir() / stored_name
 
     first_chunk = await file.read(CHUNK_SIZE)
     if not first_chunk:
@@ -131,9 +170,18 @@ async def upload_file(
             detail="Empty file uploads are not allowed",
         )
 
-    _enforce_file_type(original_name, file.content_type, first_chunk)
+    _enforce_file_type(safe_name, file.content_type, first_chunk)
 
     written_bytes = len(first_chunk)
+    user_usage_start = get_usage_bytes(owner=username)
+    global_usage_start = get_usage_bytes()
+
+    _enforce_storage_quota(
+        username=username,
+        user_usage_start=user_usage_start,
+        global_usage_start=global_usage_start,
+        bytes_written=written_bytes,
+    )
 
     try:
         async with aiofiles.open(destination, "wb") as output:
@@ -155,13 +203,34 @@ async def upload_file(
                     raise HTTPException(
                         status_code=413, detail="File too large")
 
+                _enforce_storage_quota(
+                    username=username,
+                    user_usage_start=user_usage_start,
+                    global_usage_start=global_usage_start,
+                    bytes_written=written_bytes,
+                )
+
                 await output.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
     finally:
         await file.close()
 
+    download_token = uuid.uuid4().hex
+    register_file_record(
+        file_id=file_id,
+        stored_name=stored_name,
+        owner=username,
+        original_name=original_name,
+        size=written_bytes,
+        download_token=download_token,
+    )
+
     return {
         "result": "ok",
-        "path": destination.name,
+        "file_id": file_id,
+        "download_token": download_token,
         "size": written_bytes
     }
 
