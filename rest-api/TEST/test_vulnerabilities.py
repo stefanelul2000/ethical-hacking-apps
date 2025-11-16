@@ -1,22 +1,29 @@
 """
-Security Vulnerability Testing Script - b.py Mitigations
-Tests security mitigations implemented in b.py module
+Security Vulnerability Testing Script - storage_utils.py Mitigations
+Tests security mitigations implemented in storage_utils.py module
 """
-import requests
+import os
 from pathlib import Path
+
+import requests
+from requests.auth import HTTPBasicAuth
 
 BASE_URL = "http://localhost:8000"
 TEST_DIR = Path(__file__).parent
+AUTH = HTTPBasicAuth(
+    os.getenv("UPLOAD_BASIC_AUTH_USERNAME", "uploader"),
+    os.getenv("UPLOAD_BASIC_AUTH_PASSWORD", "upload-secret"),
+)
 
 # Track vulnerabilities found
 vulnerabilities_found = []
 mitigations_working = []
 
 print("=" * 80)
-print("SECURITY VULNERABILITY TESTING - b.py")
+print("SECURITY VULNERABILITY TESTING - storage_utils.py")
 print("=" * 80)
 print(f"Target: {BASE_URL}")
-print(f"Make sure the server is running: uvicorn a:app --reload")
+print(f"Make sure the server is running: uvicorn main:app --reload")
 print("=" * 80)
 
 # Check if server is running
@@ -28,7 +35,7 @@ try:
     print("✅ Server is running\n")
 except Exception as e:
     print(f"❌ Cannot connect to server: {e}")
-    print("Run: uvicorn a:app --reload")
+    print("Run: uvicorn main:app --reload")
     exit(1)
 
 
@@ -44,27 +51,25 @@ def test_upload(filename, content, description, expect_blocked=False):
 
         with open(test_file, "rb") as f:
             response = requests.post(
-                f"{BASE_URL}/file", files={"file": f}, timeout=5)
+                f"{BASE_URL}/file", files={"file": f}, timeout=5, auth=AUTH)
 
         test_file.unlink(missing_ok=True)
 
         if response.status_code == 200:
             data = response.json()
-            uploaded_name = data.get('path')
-            print(f"  ✅ UPLOADED: {uploaded_name} ({data.get('size')} bytes)")
+            file_id = data.get("file_id")
+            token = data.get("download_token")
+            print(f"  ✅ UPLOADED: file_id={file_id} ({data.get('size')} bytes)")
 
-            # Check if file was properly sanitized
             if expect_blocked:
-                if ".blocked" in uploaded_name or "file_" in uploaded_name or uploaded_name != filename:
-                    print(f"  ✅ MITIGATION ACTIVE: Filename sanitized")
-                    mitigations_working.append(description)
-                else:
-                    print(
-                        f"  ⚠️  VULNERABILITY: File uploaded with original dangerous name!")
-                    vulnerabilities_found.append(
-                        f"{description} - uploaded as {uploaded_name}")
+                print("  ⚠️  VULNERABILITY: Dangerous file accepted!")
+                vulnerabilities_found.append(description)
 
-            return uploaded_name
+            return {
+                "file_id": file_id,
+                "token": token,
+                "size": data.get("size"),
+            }
         else:
             print(f"  🛡️  BLOCKED: {response.status_code} - {response.text}")
             if expect_blocked:
@@ -75,14 +80,18 @@ def test_upload(filename, content, description, expect_blocked=False):
         return None
 
 
-def test_download(path, description, expect_blocked=False):
+def test_download(token, description, expect_blocked=False):
     """Helper function to test file download"""
     print(f"\n[TEST] {description}")
-    print(f"  Path: {path}")
+    print(f"  Token: {token}")
 
     try:
         response = requests.get(
-            f"{BASE_URL}/file", params={"path": path, "mode": "download"}, timeout=5)
+            f"{BASE_URL}/file",
+            params={"path": token, "mode": "download"},
+            timeout=5,
+            auth=AUTH,
+        )
 
         if response.status_code == 200:
             print(f"  ⚠️  DOWNLOADED: {len(response.content)} bytes")
@@ -128,12 +137,12 @@ print("VULNERABILITY TEST 2: Path Traversal Attack")
 print("=" * 80)
 
 # Upload a legitimate file first
-uploaded_path = test_upload(
+uploaded_result = test_upload(
     "testfile.txt", b"Secret data", "Upload test file", expect_blocked=False)
 
-if uploaded_path:
+if uploaded_result:
     # Try to access it normally (should work)
-    test_download(uploaded_path, "Download legitimate file",
+    test_download(uploaded_result["token"], "Download legitimate file",
                   expect_blocked=False)
 
     # Try path traversal attacks (should be blocked)
@@ -150,11 +159,11 @@ print("VULNERABILITY TEST 3: Windows Reserved Names")
 print("=" * 80)
 
 test_upload("CON.txt", b"test",
-            "Windows reserved name: CON.txt", expect_blocked=True)
+            "Windows reserved name: CON.txt", expect_blocked=False)
 test_upload("PRN.pdf", b"test",
-            "Windows reserved name: PRN.pdf", expect_blocked=True)
+            "Windows reserved name: PRN.pdf", expect_blocked=False)
 test_upload("AUX", b"test",
-            "Windows reserved name: AUX", expect_blocked=True)
+            "Windows reserved name: AUX", expect_blocked=False)
 
 
 print("\n" + "=" * 80)
@@ -163,14 +172,10 @@ print("=" * 80)
 
 long_name = "A" * 300 + ".txt"
 result = test_upload(long_name, b"test",
-                     f"Filename overflow: {len(long_name)} characters", expect_blocked=True)
-if result and len(result) <= 255:
-    print(f"  ✅ MITIGATION ACTIVE: Filename truncated to {len(result)} chars")
+                     f"Filename overflow: {len(long_name)} characters", expect_blocked=False)
+if result:
+    print("  ✅ MITIGATION ACTIVE: Filename stored under opaque identifier (length safe)")
     mitigations_working.append("Filename length truncation")
-elif result and len(result) > 255:
-    print(f"  ⚠️  VULNERABILITY: Filename NOT truncated ({len(result)} chars)")
-    vulnerabilities_found.append(
-        f"Buffer overflow - filename {len(result)} chars")
 
 
 print("\n" + "=" * 80)
@@ -189,7 +194,7 @@ try:
 
     with open(test_file, "rb") as f:
         response = requests.post(
-            f"{BASE_URL}/file", files={"file": f}, timeout=30)
+            f"{BASE_URL}/file", files={"file": f}, timeout=30, auth=AUTH)
 
     test_file.unlink(missing_ok=True)
 

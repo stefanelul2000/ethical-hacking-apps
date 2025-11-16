@@ -1,10 +1,10 @@
 from fastapi import FastAPI
-from u import router as upload_router
-from g import router as get_router
+from downloads import router as downloads_router
+from uploads import router as uploads_router
 
 app = FastAPI(title="File API")
-app.include_router(upload_router)
-app.include_router(get_router)
+app.include_router(uploads_router)
+app.include_router(downloads_router)
 
 
 @app.get("/health")
