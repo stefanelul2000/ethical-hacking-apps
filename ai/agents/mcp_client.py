@@ -18,7 +18,7 @@ load_dotenv()
 
 app = FastAPI(title="FastMCP Client", version="1.0")
 
-default_origins = "http://localhost,https://ai-mcp.ciubi.net"
+default_origins = "https://ai-mcp-client.ciubi.net,https://dev-ai-mcp-client.ciubi.net"
 allowed_origins = [
     origin.strip()
     for origin in os.getenv("ALLOWED_ORIGINS", default_origins).split(",")
