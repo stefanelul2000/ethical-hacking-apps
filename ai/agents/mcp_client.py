@@ -18,7 +18,7 @@ load_dotenv()
 
 app = FastAPI(title="FastMCP Client", version="1.0")
 
-default_origins = "http://localhost,https://ai-mcp.ciubi.net"
+default_origins = "https://ai-mcp-client.ciubi.net,https://dev-ai-mcp-client.ciubi.net"
 allowed_origins = [
     origin.strip()
     for origin in os.getenv("ALLOWED_ORIGINS", default_origins).split(",")
@@ -44,6 +44,12 @@ security = HTTPBasic(auto_error=False)
 
 
 def enforce_auth(credentials: HTTPBasicCredentials = Depends(security)) -> None:
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Basic"},
+        )
     if not ADMIN_USER or not ADMIN_PASS:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
