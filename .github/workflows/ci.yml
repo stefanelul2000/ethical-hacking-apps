@@ -6,7 +6,7 @@ on:
 
 jobs:
   gitleaks:
-    name: Secret Detection (Gitleaks)
+    name: Secret Detection (gitleaks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,9 +14,27 @@ jobs:
         with:
           config-path: ""
           fail: true
+    
+  codeql:
+    name: Static Analysis (codeql for c/c++ & python)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      security-events: write
+    strategy:
+      matrix:
+        language: [ "cpp", "python" ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
 
   semgrep:
-    name: Code Pattern Scan (Semgrep)
+    name: Code Pattern Scan (semgrep)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +63,7 @@ jobs:
           ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
 
   python-checks:
-    name: Python Security & Code Quality
+    name: Python Security & Code Quality (flake8 & bandit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,35 +78,34 @@ jobs:
       - name: Summarize Python findings
         if: always()
         run: |
-          echo "## Python Code Quality (flake8)" >> $GITHUB_STEP_SUMMARY
-          if [ -f flake8-report.txt ] && [ -s flake8-report.txt ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat flake8-report.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No code quality issues found." >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "\n## Python Security (Bandit)" >> $GITHUB_STEP_SUMMARY
-          if [ ! -f bandit-report.json ]; then
-            echo "Bandit report missing!" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-          issues=$(jq '.results | length' bandit-report.json)
-          if [ "$issues" -eq 0 ]; then
-            echo "No security issues found." >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          echo "| Severity | Confidence | Rule | Description | File | Line |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|------------|------|-------------|------|------|" >> $GITHUB_STEP_SUMMARY
-          jq -r '
-            .results[] |
-            "| " + .issue_severity + " | " + .issue_confidence + " | **" + .test_id + "** | " + .issue_text + " | " + .filename + " | " + (.line_number|tostring) + " |"
-          ' bandit-report.json >> $GITHUB_STEP_SUMMARY
-            "| " + (.extra.severity // "N/A") + " | " + (.check_id // "N/A") + " | " + (.extra.message // .check_id) + " | " + (.path // "N/A") + " | " + (.start.line // "N/A") + " |"
-          ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
+            echo "## Python Code Quality & Security" >> $GITHUB_STEP_SUMMARY
+            echo "| Type | Severity/Code | Confidence | Rule/Description | File | Line |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|---------------|------------|------------------|------|------|" >> $GITHUB_STEP_SUMMARY
+            # flake8 results
+            if [ -f flake8-report.txt ] && [ -s flake8-report.txt ]; then
+              awk 'match($0, /^(.+?):([0-9]+):([0-9]+): ([A-Z][0-9]+) (.+)/, arr) { printf "| flake8 | %s | | %s | %s | %s |", arr[4], arr[5], arr[1], arr[2] }' flake8-report.txt >> $GITHUB_STEP_SUMMARY
+            fi
+            # bandit results
+            if [ -f bandit-report.json ]; then
+              jq -r '
+                .results[] |
+                "| bandit | " + .test_id + " | " + .issue_severity + " | " + .issue_text + " | " + .filename + " | " + (.line_number|tostring) + " |"
+              ' bandit-report.json >> $GITHUB_STEP_SUMMARY
+            else
+              echo "Bandit report missing!" >> $GITHUB_STEP_SUMMARY
+            fi
+              # Summarize Semgrep findings
+              if [ -f semgrep-report.json ]; then
+                jq -r '
+                  .results[] |
+                  "| " + (.extra.severity // "N/A") + " | " + (.check_id // "N/A") + " | " + (.extra.message // .check_id) + " | " + (.path // "N/A") + " | " + (.start.line // "N/A") + " |"
+                ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
+              else
+                echo "Semgrep report missing!" >> $GITHUB_STEP_SUMMARY
+              fi
 
   cppcheck:
-    name: C/C++ Static Security Scan (cppcheck)
+    name: C/C++ Security & Code Quality (cppcheck)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
