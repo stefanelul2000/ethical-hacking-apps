@@ -27,7 +27,4 @@ jobs:
       - name: Summarize Bandit findings
         if: always()
         run: |
-          echo "## Bandit Scan" >> $GITHUB_STEP_SUMMARY
-          echo "- Command: \`bandit -r . -ll -s B104\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Result: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- See job logs for detailed findings." >> $GITHUB_STEP_SUMMARY
+          bandit -r . -ll -s B104 >> $GITHUB_STEP_SUMMARY
