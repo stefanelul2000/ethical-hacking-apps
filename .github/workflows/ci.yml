@@ -30,6 +30,9 @@ jobs:
           {
             if [ -f bandit-report.txt ]; then
               cat bandit-report.txt
+            else
+              echo "bandit-report.txt missing"
+            fi
           } >> $GITHUB_STEP_SUMMARY
 
 
