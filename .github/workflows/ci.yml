@@ -4,6 +4,7 @@ on:
   push:
     branches: ["ci"]
 
+jobs:
   gitleaks:
     name: Secret Detection (Gitleaks)
     runs-on: ubuntu-latest
@@ -42,8 +43,6 @@ on:
             .results[] |
             "| " + (.extra.severity // "N/A") + " | " + (.check_id // "N/A") + " | " + (.extra.message // .check_id) + " | " + (.path // "N/A") + " | " + (.start.line // "N/A") + " |"
           ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
-
- 
 
   python-checks:
     name: Python Security & Code Quality
