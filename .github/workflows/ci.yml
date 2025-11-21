@@ -48,13 +48,47 @@ jobs:
             exit 0
           fi
 
-          echo "| Severity | Confidence | Rule | Description | File | Line | CWE |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|------------|------|-------------|------|------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| Severity | Confidence | Rule | Description | File | Line |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|------------|------|-------------|------|------|" >> $GITHUB_STEP_SUMMARY
 
           jq -r '
             .results[] |
-            "| \(.issue_severity) | \(.issue_confidence) | **\(.test_id)** | \(.issue_text) | \(.filename) | \(.line_number) | [\(.cwe.id)](\(.cwe.link)) |"
+            "| \(.issue_severity) | \(.issue_confidence) | **\(.test_id)** | \(.issue_text) | \(.filename) | \(.line_number) |"
           ' bandit-report.json >> $GITHUB_STEP_SUMMARY
+
+  cppcheck:
+    name: C/C++ Static Security Scan (cppcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=all --inconclusive --template='{file}:{line}:{severity}:{id}:{message}' . 2> cppcheck-report.txt || true
+
+      - name: Summarize cppcheck findings
+        if: always()
+        run: |
+          echo "## cppcheck Security Findings" >> $GITHUB_STEP_SUMMARY
+          if [ ! -f cppcheck-report.txt ]; then
+            echo "Report missing." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          if [ ! -s cppcheck-report.txt ]; then
+            echo "No issues reported." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          {
+            echo '```'
+            cat cppcheck-report.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
 
 
 
