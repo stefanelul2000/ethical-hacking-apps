@@ -2,7 +2,7 @@ name: Security Pipeline
 
 on:
   push:
-    branches: ["ci"]
+    branches: ["*"]
 
 jobs:
   gitleaks:
