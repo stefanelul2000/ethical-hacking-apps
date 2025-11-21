@@ -14,6 +14,45 @@ jobs:
         with:
           config-path: ""
           fail: true
+  trivy:
+    name: SAST + Dependency Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -qO- https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo deb https://aquasecurity.github.io/trivy-repo/deb / | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: File System Scan
+        run: trivy fs --exit-code 1 --severity HIGH,CRITICAL . | tee trivy-fs-report.txt
+
+      - name: Vulnerability DB Scan
+        run: trivy sbom --exit-code 1 --severity HIGH,CRITICAL . | tee trivy-sbom-report.txt
+
+      - name: Summarize Trivy findings
+        if: always()
+        run: |
+          echo "## Trivy File System Scan" >> $GITHUB_STEP_SUMMARY
+          if [ -f trivy-fs-report.txt ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat trivy-fs-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No file system scan report found." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "\n## Trivy SBOM Scan" >> $GITHUB_STEP_SUMMARY
+          if [ -f trivy-sbom-report.txt ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat trivy-sbom-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No SBOM scan report found." >> $GITHUB_STEP_SUMMARY
+          fi
 
   bandit:
     name: Python Static Security Scan (Bandit)
