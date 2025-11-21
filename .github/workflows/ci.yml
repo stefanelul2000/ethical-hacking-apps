@@ -4,55 +4,6 @@ on:
   push:
     branches: ["ci"]
 
-jobs:
-  cpp-lint:
-    name: C/C++ Code Quality (cppcheck)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install cppcheck
-        run: sudo apt-get update && sudo apt-get install -y cppcheck
-      - name: Run cppcheck (quality only)
-        run: cppcheck --enable=style,performance,portability --template='{file}:{line}:{severity}:{id}:{message}' . 2> cpp-lint-report.txt || true
-      - name: Summarize cppcheck code quality
-        if: always()
-        run: |
-          echo "## cppcheck Code Quality Report" >> $GITHUB_STEP_SUMMARY
-          if [ ! -f cpp-lint-report.txt ]; then
-            echo "No cppcheck report found." >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-          if [ ! -s cpp-lint-report.txt ]; then
-            echo "No code quality issues found." >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          echo '| File | Line | Severity | ID | Message |' >> $GITHUB_STEP_SUMMARY
-          echo '|------|------|----------|----|---------|' >> $GITHUB_STEP_SUMMARY
-          awk -F ':' '{printf "| %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, substr($0, index($0, $5))}' cpp-lint-report.txt >> $GITHUB_STEP_SUMMARY
-  flake8:
-    name: Python Code Quality (flake8)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install flake8
-        run: python3 -m pip install flake8
-      - name: Run flake8
-        run: flake8 . --format=default --count --show-source --statistics > flake8-report.txt || true
-      - name: Summarize flake8 findings
-        if: always()
-        run: |
-          echo "## flake8 Code Quality Report" >> $GITHUB_STEP_SUMMARY
-          if [ ! -f flake8-report.txt ]; then
-            echo "No flake8 report found." >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-          if [ ! -s flake8-report.txt ]; then
-            echo "No code quality issues found." >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat flake8-report.txt >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
   gitleaks:
     name: Secret Detection (Gitleaks)
     runs-on: ubuntu-latest
@@ -94,46 +45,48 @@ jobs:
 
  
 
-  bandit:
-    name: Python Static Security Scan (Bandit)
+  python-checks:
+    name: Python Security & Code Quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Bandit & jq
+      - name: Install flake8, bandit, jq
         run: |
-          python3 -m pip install bandit
+          python3 -m pip install flake8 bandit
           sudo apt-get update && sudo apt-get install -y jq
-
-      # Run bandit but never fail the step (|| true)
+      - name: Run flake8
+        run: flake8 . --format=default --count --show-source --statistics > flake8-report.txt || true
       - name: Run Bandit in JSON mode
-        run: |
-          bandit -r . -f json -o bandit-report.json || true
-
-      # Convert JSON to Markdown table
-      - name: Output Findings
+        run: bandit -r . -f json -o bandit-report.json || true
+      - name: Summarize Python findings
         if: always()
         run: |
-          echo "## Bandit Security Findings" >> $GITHUB_STEP_SUMMARY
+          echo "## Python Code Quality (flake8)" >> $GITHUB_STEP_SUMMARY
+          if [ -f flake8-report.txt ] && [ -s flake8-report.txt ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat flake8-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No code quality issues found." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "\n## Python Security (Bandit)" >> $GITHUB_STEP_SUMMARY
           if [ ! -f bandit-report.json ]; then
-            echo "Bandit report missing! Failing." >> $GITHUB_STEP_SUMMARY
+            echo "Bandit report missing!" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
-
           issues=$(jq '.results | length' bandit-report.json)
-
           if [ "$issues" -eq 0 ]; then
-            echo "No issues found." >> $GITHUB_STEP_SUMMARY
+            echo "No security issues found." >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
-
           echo "| Severity | Confidence | Rule | Description | File | Line |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|------------|------|-------------|------|------|" >> $GITHUB_STEP_SUMMARY
-
           jq -r '
             .results[] |
-            "| \(.issue_severity) | \(.issue_confidence) | **\(.test_id)** | \(.issue_text) | \(.filename) | \(.line_number) |"
+            "| " + .issue_severity + " | " + .issue_confidence + " | **" + .test_id + "** | " + .issue_text + " | " + .filename + " | " + (.line_number|tostring) + " |"
           ' bandit-report.json >> $GITHUB_STEP_SUMMARY
+            "| " + (.extra.severity // "N/A") + " | " + (.check_id // "N/A") + " | " + (.extra.message // .check_id) + " | " + (.path // "N/A") + " | " + (.start.line // "N/A") + " |"
+          ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
 
   cppcheck:
     name: C/C++ Static Security Scan (cppcheck)
