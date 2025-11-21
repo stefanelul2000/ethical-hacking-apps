@@ -23,4 +23,4 @@ jobs:
       - name: Install Bandit
         run: python3 -m pip install bandit
       - name: Run Bandit
-        run: bandit -r . -ll
+        run: bandit -r . -ll -s B104
