@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <openssl/evp.h>
 
 // Standard C++ headers
 #include <cstdio>
@@ -160,6 +161,14 @@ std::vector<uint8_t> verify_and_transform_key(const uint8_t *input, size_t lengt
     return data;
 }
 
+/*
+    in C++ un namespace este folosit ca sa grupezi
+    functii si variabile ca sa nu existe conflicte
+    astfel poti sa ai mai multe functii cu acelasi nume
+    atata timp cat sunt in namespace-uri diferite
+
+*/
+
 namespace ServerNamespace
 {
 
@@ -198,38 +207,22 @@ namespace ServerNamespace
     // Base64 decoder
     size_t base64_decode(const char *input, uint8_t *output, size_t output_size)
     {
-        auto char_value = [&](char c) -> int
-        {
-            if (c >= 'A' && c <= 'Z')
-                return c - 'A';
-            if (c >= 'a' && c <= 'z')
-                return c - 'a' + 26;
-            if (c >= '0' && c <= '9')
-                return c - '0' + 52;
-            if (c == '+')
-                return 62;
-            if (c == '/')
-                return 63;
-            return -1;
-        };
+       
+        EVP_ENCODE_CTX *ctx = EVP_ENCODE_CTX_new();
+        int outlen = 0, tmplen = 0;
 
-        int buffer = 0, bits = 0;
-        size_t output_index = 0;
+        EVP_DecodeInit(ctx);
 
-        for (size_t i = 0; input[i] && output_index < output_size; ++i)
-        {
-            int value = char_value(input[i]);
-            if (value < 0)
-                continue;
-            buffer = (buffer << 6) | value;
-            bits += 6;
-            if (bits >= 8)
-            {
-                bits -= 8;
-                output[output_index++] = (uint8_t)((buffer >> bits) & 0xFF);
-            }
-        }
-        return output_index;
+        int ret = EVP_DecodeUpdate(ctx, output, &outlen, (unsigned char*)input, strlen(input));
+        if (ret < 0) { EVP_ENCODE_CTX_free(ctx); return 0; }
+
+        ret = EVP_DecodeFinal(ctx, output + outlen, &tmplen);
+        EVP_ENCODE_CTX_free(ctx);
+
+        if (ret < 0)
+            return 0;
+
+        return outlen + tmplen;
     }
 
     // Decode base64 string
@@ -306,7 +299,11 @@ namespace ServerNamespace
         message[bytes_received] = 0;
 
         // DANGEROUS: strcpy without bounds checking!
-        strcpy(small_buffer, message); // Buffer overflow if message > 48 bytes
+        /*
+            FIXED 
+        */
+        strncpy(small_buffer, message, sizeof(small_buffer) - 1);
+        small_buffer[sizeof(small_buffer) - 1] = 0;          // Buffer overflow if message > 48 bytes
 
         SOCKET_SEND(socket_fd, small_buffer, strlen(small_buffer), 0);
     }
@@ -334,7 +331,16 @@ namespace ServerNamespace
         message[bytes_received] = 0;
 
         // DANGEROUS: memcpy without bounds checking!
-        memcpy(heap_ptr->data, message, strlen(message) + 1); // Can overflow into 'tag'
+
+        /*
+                FIX VULN 2
+
+        */
+        size_t safe_len = strnlen(message, sizeof(heap_ptr->data) - 1);
+        memcpy(heap_ptr->data, message, safe_len);
+        heap_ptr->data[safe_len] = 0;
+        
+        // Can overflow into 'tag'
 
         SOCKET_SEND(socket_fd, heap_ptr->data, strlen(heap_ptr->data), 0);
         delete heap_ptr;
@@ -353,38 +359,33 @@ namespace ServerNamespace
         message[bytes_received] = 0;
 
         // DANGEROUS: strcpy without bounds checking on stack!
-        strcpy(stack_buffer, message); // Can overwrite return address
+        snprintf(stack_buffer, sizeof(stack_buffer), "%s", message); // Can overwrite return address
 
         SOCKET_SEND(socket_fd, "OK\n", 3, 0);
     }
 
     // VULNERABILITY 4: Assembly buffer overflow with rep movsb
-    void handle_assembly_vuln(int socket_fd)
-    {
-        uint8_t source[512];
-        ZERO_MEMORY(source);
+void handle_assembly_vuln(int socket_fd)
+{
+    uint8_t source[512];
+    ZERO_MEMORY(source);
 
-        int bytes_received = SOCKET_RECV(socket_fd, source, sizeof(source) - 1);
-        if (bytes_received <= 0)
-            return;
-        source[bytes_received] = 0;
+    int bytes_received = SOCKET_RECV(socket_fd, source, sizeof(source) - 1);
+    if (bytes_received <= 0)
+        return;
 
-        uint8_t destination[40]; // Small destination buffer
-        ZERO_MEMORY(destination);
-        size_t length = std::strlen(reinterpret_cast<char *>(source)) + 1;
+    source[bytes_received] = 0;
 
-        // DANGEROUS: Copies without checking if destination is large enough!
-#if defined(__x86_64__) || defined(__i386__)
-        uint8_t *src_ptr = source;
-        uint8_t *dst_ptr = destination;
-        size_t count = length;
-        asm volatile("rep movsb\n" : "+D"(dst_ptr), "+S"(src_ptr), "+c"(count) : : "memory");
-#else
-        std::memcpy(destination, source, length); // Still vulnerable
-#endif
+    uint8_t destination[40];
+    ZERO_MEMORY(destination);
 
-        SOCKET_SEND(socket_fd, destination, strnlen(reinterpret_cast<char *>(destination), sizeof(destination)), 0);
-    }
+    // FIX: no raw rep movsb
+    size_t safe_len = strnlen((char*)source, sizeof(destination) - 1);
+    memcpy(destination, source, safe_len);
+    destination[safe_len] = 0;
+
+    SOCKET_SEND(socket_fd, destination, safe_len, 0);
+}
 
     // Array of vulnerability handlers
     vulnerability_handler vulnerability_handlers[] = {
@@ -425,18 +426,10 @@ namespace ServerNamespace
         }
 
         // String comparison with obfuscation
-        auto string_equals = [&](const std::string &str_a, const char *str_b) -> bool
+        bool string_equals_safe(const std::string& a, const char* b)
         {
-            uint32_t hash_a = 0, hash_b = 0;
-            for (char c : str_a)
-                hash_a = hash_a * 31 + (uint8_t)c;
-            for (size_t i = 0; str_b[i]; ++i)
-                hash_b = hash_b * 31 + (uint8_t)str_b[i];
-            uint32_t rand_mask = random_uint32();
-            hash_a ^= rand_mask;
-            hash_b ^= rand_mask;
-            return (hash_a ^ hash_b) == 0;
-        };
+            return a == std::string(b);
+        }
 
         // Dispatch to appropriate vulnerability handler
         if (string_equals(keyword_stack, client_command))
@@ -470,6 +463,8 @@ namespace ServerNamespace
     }
 
     // Global flag for server shutdown
+    // aici ai operatii atomice adica nu pot sa fie intrerupte la jumatate
+    //se folosesc pentru variabile modificate intre ele
     volatile sig_atomic_t server_running = 1;
 
     // Signal handler for graceful shutdown
@@ -492,6 +487,8 @@ namespace ServerNamespace
     // Main server loop
     int server_main_loop()
     {
+
+        // aici este un char cu pi ca cu
         unsigned char api_key_data[] = {
             0x70, 0x69, 0x20, 0x70, 0x69, 0x20, 0x70, 0x69, 0x20, 0x70, 0x69, 0x20, 0x70, 0x69, 0x20,
             0x70, 0x69, 0x20, 0x70, 0x69, 0x20, 0x70, 0x69, 0x20, 0x70, 0x69, 0x20, 0x70, 0x69, 0x20,
@@ -542,10 +539,17 @@ namespace ServerNamespace
             0x69, 0x63, 0x68, 0x75, 0x20, 0x70, 0x69, 0x63, 0x68, 0x75, 0x20, 0x70, 0x69, 0x6B, 0x61,
             0x63, 0x68, 0x75, 0x00};
 
+
+       
         const int SERVER_PORT = 4444;
 
-        // Create socket
+        // Create socket TCP/IP
+        // AF_INET - spune ca va folosi IPv4
+        //SOCK_STREAM - ca este TCP - flux de date ordonat
+        // 0 pentru default protocol pus din conventie
         int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+        // daca returneaza ceva mai mic de zero cum ar fii -1 
+        // functia a esuat
         if (server_socket < 0)
         {
             perror("socket");
@@ -554,16 +558,40 @@ namespace ServerNamespace
 
         // Set socket options
         int socket_option = 1;
+        // functia este folosita pentru a configura socket-ul
+        /*
+            server_socket = e socketul definit mai sus pe care aplici optiunea
+            SOL_SOCKET - nivelul de optiuni - socket general aici
+            SO_REUSEADDR - permite refolosirea adresei portului imediat dupa ce serverul se opreste
+            fara sa astepti timeout daca nu portul ramane blocat si e nasol
+
+            socket_option = 1 - e activat
+
+            sizeof(socket_option) - dimensiunea variabilei sa stie cat sa citeasca
+        */
+
         setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &socket_option, sizeof(socket_option));
 
         // Configure server address
+
+        // aici se creeaza o structura de tipul sockaddr_in 
         sockaddr_in server_addr;
+
+        // Initializeaza structura cu 0 - asta ca sa nu ramana valori random in campuri nefolosite
+
         ZERO_MEMORY(&server_addr);
+
+        //seteaza familia de adrese la IPV4
+        // adica socket-ul va folosi adrese de tipul 192.168.x.x
         server_addr.sin_family = AF_INET;
+        // aici se seteaza portul la care se va asculta 
+        //htons converteste din little endian la formatul masinii
         server_addr.sin_port = htons(SERVER_PORT);
+        // aici spune ca serverul va asculta pe toate interfetele posibile
         server_addr.sin_addr.s_addr = INADDR_ANY;
 
-        // Bind socket
+        // Bind socket - ce face este ca leaga socketul server_socket de o adresa
+        // si de un port specific 
         if (bind(server_socket, (sockaddr *)&server_addr, sizeof(server_addr)) < 0)
         {
             perror("bind");
@@ -572,6 +600,11 @@ namespace ServerNamespace
         }
 
         // Listen for connections
+        // listen - pune serverul in modul server adica pregateste sa asculte
+        // conexiuni de la clienti
+
+        // 5 numarul maxim de conexiuni ce poate sa stea in coada
+
         if (listen(server_socket, 5) < 0)
         {
             perror("listen");
@@ -584,9 +617,18 @@ namespace ServerNamespace
         // Main accept loop
         while (server_running)
         {
+              
+            //sockaddr_in - retine adresa unui client 
             sockaddr_in client_addr;
+
+            //defineste o variabila client_addr_len de tip socklen_t
+            // initiaza cu dimensiunea structurii client_addr
             socklen_t client_addr_len = sizeof(client_addr);
 
+
+            // accept - asteapta un client sa se conecteze la server_socket
+            // cand se conecteaza creeaza un nou socket dedicat acestui client
+            // completeaza client_addr cu info despre client IP, port
             int client_socket = accept(server_socket, (sockaddr *)&client_addr, &client_addr_len);
             if (client_socket < 0)
             {
@@ -627,6 +669,13 @@ namespace ServerNamespace
 
 int main()
 {
-    std::signal(SIGINT, ServerNamespace::signal_handler);
+
+    // daca userul apasa CTRL+ C se va executa aceasta functie
+    // cand apesi CTRL+C se va rula signal handler
+    struct sigaction sa;
+    sa.sa_handler = ServerNamespace::signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGINT, &sa, NULL);
     return ServerNamespace::server_main_loop();
 }
