@@ -83,11 +83,9 @@ jobs:
             exit 0
           fi
 
-          {
-            echo '```'
-            cat cppcheck-report.txt
-            echo '```'
-          } >> $GITHUB_STEP_SUMMARY
+            echo "| File | Line | Severity | ID | Message |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|------|----------|----|---------|" >> $GITHUB_STEP_SUMMARY
+            awk -F ':' '{printf "| %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, substr($0, index($0, $5))}' cppcheck-report.txt >> $GITHUB_STEP_SUMMARY
 
 
 
