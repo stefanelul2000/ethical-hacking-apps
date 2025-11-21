@@ -28,14 +28,14 @@ jobs:
       - name: Summarize clang-tidy findings
         if: always()
         run: |
-          echo "## clang-tidy Report" >> $GITHUB_STEP_SUMMARY
-          if [ -f clang-tidy-report.txt ] && [ -s clang-tidy-report.txt ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat clang-tidy-report.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No clang-tidy issues found." >> $GITHUB_STEP_SUMMARY
-          fi
+            echo "## clang-tidy Report" >> $GITHUB_STEP_SUMMARY
+            if [ -f clang-tidy-report.txt ] && [ -s clang-tidy-report.txt ]; then
+              echo "| File | Line | Severity | Message |" >> $GITHUB_STEP_SUMMARY
+              echo "|------|------|---------|---------|" >> $GITHUB_STEP_SUMMARY
+              awk -F ':' '/^.*:[0-9]+:[0-9]+:/ { split($0, arr, ":"); printf "| %s | %s | %s | %s |", arr[1], arr[2], arr[3], substr($0, index($0,$4)) }' clang-tidy-report.txt >> $GITHUB_STEP_SUMMARY
+            else
+              echo "No clang-tidy issues found." >> $GITHUB_STEP_SUMMARY
+            fi
 
   pylint:
     name: Python Static Analysis (pylint)
@@ -49,14 +49,15 @@ jobs:
       - name: Summarize pylint findings
         if: always()
         run: |
-          echo "## pylint Report" >> $GITHUB_STEP_SUMMARY
-          if [ -f pylint-report.txt ] && [ -s pylint-report.txt ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat pylint-report.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No pylint issues found." >> $GITHUB_STEP_SUMMARY
-          fi
+            echo "## pylint Report" >> $GITHUB_STEP_SUMMARY
+            if [ -f pylint-report.txt ] && [ -s pylint-report.txt ]; then
+              echo "| Type | File | Line | Message |" >> $GITHUB_STEP_SUMMARY
+              echo "|------|------|------|---------|" >> $GITHUB_STEP_SUMMARY
+              awk '/^.+:[0-9]+: / { split($0, arr, ":"); type=arr[1]; file=arr[2]; line=arr[3]; msg=substr($0, index($0,$4)); printf "| %s | %s | %s | %s |", type, file, line, msg }' pylint-report.txt >> $GITHUB_STEP_SUMMARY
+              tail -n 1 pylint-report.txt >> $GITHUB_STEP_SUMMARY
+            else
+              echo "No pylint issues found." >> $GITHUB_STEP_SUMMARY
+            fi
 
   semgrep:
     name: Code Pattern Scan (semgrep)
