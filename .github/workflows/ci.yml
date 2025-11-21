@@ -1,4 +1,4 @@
-name: Security Pipeline
+name: Security Scan Pipeline
 
 on:
   push:
