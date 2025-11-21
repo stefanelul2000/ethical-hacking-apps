@@ -14,13 +14,43 @@ jobs:
         with:
           config-path: ""
           fail: true
+          
+  semgrep:
+    name: Code Pattern Scan (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Semgrep
+        run: python3 -m pip install semgrep
+      - name: Run Semgrep (OWASP Top 10)
+        run: semgrep --config owasp-top-ten --json > semgrep-report.json || true
+      - name: Summarize Semgrep findings
+        if: always()
+        run: |
+          echo "## Semgrep OWASP Top 10 Findings" >> $GITHUB_STEP_SUMMARY
+          if [ ! -f semgrep-report.json ]; then
+            echo "Semgrep report missing!" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          issues=$(jq '.results | length' semgrep-report.json)
+          if [ "$issues" -eq 0 ]; then
+            echo "No issues found." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          echo "| Severity | Check ID | Message | File | Line |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|----------|---------|------|------|" >> $GITHUB_STEP_SUMMARY
+          jq -r '
+            .results[] |
+            "| " + (.extra.severity // "N/A") + " | " + (.check_id // "N/A") + " | " + (.extra.message // .check_id) + " | " + (.path // "N/A") + " | " + (.start.line // "N/A") + " |"
+          ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
+
   trivy:
     name: SAST + Dependency Scan (Trivy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install Trivy
-          run: |
+        run: |
             wget -qO- https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.50.2_Linux-64bit.tar.gz | tar zxvf -
             sudo mv trivy /usr/local/bin/
 
