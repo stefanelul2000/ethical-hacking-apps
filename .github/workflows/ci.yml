@@ -14,50 +14,6 @@ jobs:
         with:
           config-path: ""
           fail: true
-    
-  clang-tidy:
-    name: C/C++ Static Analysis (clang-tidy)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install clang-tidy
-        run: sudo apt-get update && sudo apt-get install -y clang-tidy
-      - name: Run clang-tidy
-        run: |
-          find . -name '*.cpp' | xargs clang-tidy > clang-tidy-report.txt || true
-      - name: Summarize clang-tidy findings
-        if: always()
-        run: |
-            echo "## clang-tidy Report" >> $GITHUB_STEP_SUMMARY
-            if [ -f clang-tidy-report.txt ] && [ -s clang-tidy-report.txt ]; then
-              echo "| File | Line | Severity | Message |" >> $GITHUB_STEP_SUMMARY
-              echo "|------|------|---------|---------|" >> $GITHUB_STEP_SUMMARY
-              awk -F ':' '/^.*:[0-9]+:[0-9]+:/ { split($0, arr, ":"); printf "| %s | %s | %s | %s |", arr[1], arr[2], arr[3], substr($0, index($0,$4)) }' clang-tidy-report.txt >> $GITHUB_STEP_SUMMARY
-            else
-              echo "No clang-tidy issues found." >> $GITHUB_STEP_SUMMARY
-            fi
-
-  pylint:
-    name: Python Static Analysis (pylint)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install pylint
-        run: python3 -m pip install pylint
-      - name: Run pylint
-        run: pylint **/*.py > pylint-report.txt || true
-      - name: Summarize pylint findings
-        if: always()
-        run: |
-            echo "## pylint Report" >> $GITHUB_STEP_SUMMARY
-            if [ -f pylint-report.txt ] && [ -s pylint-report.txt ]; then
-              echo "| Type | File | Line | Message |" >> $GITHUB_STEP_SUMMARY
-              echo "|------|------|------|---------|" >> $GITHUB_STEP_SUMMARY
-              awk '/^.+:[0-9]+: / { split($0, arr, ":"); type=arr[1]; file=arr[2]; line=arr[3]; msg=substr($0, index($0,$4)); printf "| %s | %s | %s | %s |", type, file, line, msg }' pylint-report.txt >> $GITHUB_STEP_SUMMARY
-              tail -n 1 pylint-report.txt >> $GITHUB_STEP_SUMMARY
-            else
-              echo "No pylint issues found." >> $GITHUB_STEP_SUMMARY
-            fi
 
   semgrep:
     name: Code Pattern Scan (semgrep)
@@ -88,42 +44,112 @@ jobs:
             "| " + (.extra.severity // "N/A") + " | " + (.check_id // "N/A") + " | " + (.extra.message // .check_id) + " | " + (.path // "N/A") + " | " + (.start.line // "N/A") + " |"
           ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
 
-  python-checks:
-    name: Python Security & Code Quality (flake8 & bandit)
+  pylint:
+    name: Python Static Analysis (pylint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install flake8, bandit, jq
-        run: |
-          python3 -m pip install flake8 bandit
-          sudo apt-get update && sudo apt-get install -y jq
-      - name: Run flake8
-        run: flake8 . --format=default --count --show-source --statistics > flake8-report.txt || true
-      - name: Run Bandit in JSON mode
-        run: bandit -r . -f json -o bandit-report.json || true
-      - name: Summarize Python findings
+      - name: Install pylint
+        run: python3 -m pip install pylint
+      - name: Run pylint
+        run: pylint **/*.py > pylint-report.txt || true
+      - name: Summarize pylint findings
         if: always()
         run: |
-          echo "## Python Code Quality & Security" >> $GITHUB_STEP_SUMMARY
-          echo "| Type | Severity/Code | Confidence | Rule/Description | File | Line |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|---------------|------------|------------------|------|------|" >> $GITHUB_STEP_SUMMARY
-
-          # flake8 results
-          if [ -f flake8-report.txt ] && [ -s flake8-report.txt ]; then
-            awk 'match($0, /^(.+?):([0-9]+):([0-9]+): ([A-Z][0-9]+) (.+)/, arr) {
-                  printf "| flake8 | %s | | %s | %s | %s |\n", arr[4], arr[5], arr[1], arr[2]
-                }' flake8-report.txt >> $GITHUB_STEP_SUMMARY
+          echo "## pylint Report" >> $GITHUB_STEP_SUMMARY
+          if [ -f pylint-report.txt ] && [ -s pylint-report.txt ]; then
+            echo "| Type | File | Line | Message |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|------|------|---------|" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r line; do
+              if [[ $line =~ ^(.+):([0-9]+):([0-9]+):(.*)$ ]]; then
+                type=${BASH_REMATCH[1]}
+                file=${BASH_REMATCH[2]}
+                line_num=${BASH_REMATCH[3]}
+                message=${BASH_REMATCH[4]}
+                echo "| $type | $file | $line_num | $message |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < pylint-report.txt
+            tail -n 1 pylint-report.txt >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No pylint issues found." >> $GITHUB_STEP_SUMMARY
           fi
 
-          # bandit results
+  flake8:
+    name: Python Code Quality (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flake8
+        run: python3 -m pip install flake8
+      - name: Run flake8
+        run: flake8 . --format=default --count --show-source --statistics > flake8-report.txt || true
+      - name: Summarize flake8 findings
+        if: always()
+        run: |
+          echo "## flake8 Code Quality" >> $GITHUB_STEP_SUMMARY
+          echo "| Code | Description | File | Line |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------------|------|------|" >> $GITHUB_STEP_SUMMARY
+          if [ -f flake8-report.txt ] && [ -s flake8-report.txt ]; then
+            awk 'match($0, /^(.+?):([0-9]+):([0-9]+): ([A-Z][0-9]+) (.+)/, arr) {
+                  printf "| %s | %s | %s | %s |\n", arr[4], arr[5], arr[1], arr[2]
+                }' flake8-report.txt >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No flake8 issues found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  bandit:
+    name: Python Security Scan (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bandit
+        run: python3 -m pip install bandit
+      - name: Run Bandit in JSON mode
+        run: bandit -r . -f json -o bandit-report.json || true
+      - name: Summarize bandit findings
+        if: always()
+        run: |
+          echo "## Bandit Security Scan" >> $GITHUB_STEP_SUMMARY
+          echo "| Test ID | Severity | Description | File | Line |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|---------|-------------|------|------|" >> $GITHUB_STEP_SUMMARY
           if [ -f bandit-report.json ]; then
             jq -r '
               .results[] |
-              "| bandit | " + .test_id + " | " + .issue_severity + " | " + .issue_text +
+              "| " + .test_id + " | " + .issue_severity + " | " + .issue_text +
               " | " + .filename + " | " + (.line_number|tostring) + " |"
             ' bandit-report.json >> $GITHUB_STEP_SUMMARY
           else
-            echo "Bandit report missing!" >> $GITHUB_STEP_SUMMARY
+            echo "No bandit issues found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  clang-tidy:
+    name: C/C++ Static Analysis (clang-tidy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+      - name: Run clang-tidy
+        run: |
+          find . -name '*.cpp' | xargs clang-tidy > clang-tidy-report.txt || true
+      - name: Summarize clang-tidy findings
+        if: always()
+        run: |
+          echo "## clang-tidy Report" >> $GITHUB_STEP_SUMMARY
+          if [ -f clang-tidy-report.txt ] && [ -s clang-tidy-report.txt ]; then
+            echo "| File | Line | Severity | Message |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|------|---------|---------|" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r line; do
+              if [[ $line =~ ^(.+):([0-9]+):([0-9]+):(.*)$ ]]; then
+                file=${BASH_REMATCH[1]}
+                line_num=${BASH_REMATCH[2]}
+                severity=${BASH_REMATCH[3]}
+                message=${BASH_REMATCH[4]}
+                echo "| $file | $line_num | $severity | $message |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < clang-tidy-report.txt
+          else
+            echo "No clang-tidy issues found." >> $GITHUB_STEP_SUMMARY
           fi
 
   cppcheck:
@@ -156,7 +182,3 @@ jobs:
             echo "| File | Line | Severity | ID | Message |" >> $GITHUB_STEP_SUMMARY
             echo "|------|------|----------|----|---------|" >> $GITHUB_STEP_SUMMARY
             awk -F ':' '{printf "| %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, substr($0, index($0, $5))}' cppcheck-report.txt >> $GITHUB_STEP_SUMMARY
-
-
-
-
