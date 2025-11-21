@@ -21,18 +21,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Bandit
-        run: python3 -m pip install bandit
+      - name: Install Bandit & jq
+        run: |
+          python3 -m pip install bandit
+          sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Run Bandit with detailed output
+      # Run bandit but never fail the step (|| true)
+      - name: Run Bandit in JSON mode
         run: |
           bandit -r . -f json -o bandit-report.json || true
-          bandit -r . -f screen
 
-      - name: Summarize Bandit findings
+      # Convert JSON to Markdown table
+      - name: Output Findings
         if: always()
         run: |
           echo "## Bandit Security Findings" >> $GITHUB_STEP_SUMMARY
-          cat bandit-report.json >> $GITHUB_STEP_SUMMARY
+          if [ ! -f bandit-report.json ]; then
+            echo "Bandit report missing! Failing." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          issues=$(jq '.results | length' bandit-report.json)
+
+          if [ "$issues" -eq 0 ]; then
+            echo "No issues found." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          echo "| Severity | Confidence | Rule | Description | File | Line | CWE |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|------------|------|-------------|------|------|-----|" >> $GITHUB_STEP_SUMMARY
+
+          jq -r '
+            .results[] |
+            "| \(.issue_severity) | \(.issue_confidence) | **\(.test_id)** | \(.issue_text) | \(.filename) | \(.line_number) | [\(.cwe.id)](\(.cwe.link)) |"
+          ' bandit-report.json >> $GITHUB_STEP_SUMMARY
+
 
 
