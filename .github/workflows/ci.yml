@@ -1,0 +1,90 @@
+name: Security Pipeline
+
+on:
+  push:
+    branches: ["ci"]
+
+jobs:
+  gitleaks:
+    name: Secret Detection (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gitleaks/gitleaks-action@v2
+        with:
+          config-path: ""
+          fail: true
+
+  codeql:
+    name: Static Analysis (CodeQL for C++ & Python)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      security-events: write
+    strategy:
+      matrix:
+        language: [ "cpp", "python" ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
+
+  python-security:
+    name: Python Vulnerability Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python dependencies (if exists)
+        run: |
+          if [ -f requirements.txt ]; then
+            python3 -m pip install -r requirements.txt
+          fi
+      - name: Run pip-audit
+        run: |
+          python3 -m pip install pip-audit
+          pip-audit --strict
+
+  cpp-lint:
+    name: C++ Code Quality (cppcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cppcheck
+        run: sudo apt-get install -y cppcheck
+      - name: Run cppcheck
+        run: cppcheck --enable=all --error-exitcode=1 .
+
+  python-lint:
+    name: Python Linting (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flake8
+        run: python3 -m pip install flake8
+      - name: Run flake8
+        run: flake8 .
+
+  trivy:
+    name: SAST + Dependency Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -qO- https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo deb https://aquasecurity.github.io/trivy-repo/deb / | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: File System Scan
+        run: trivy fs --exit-code 1 --severity HIGH,CRITICAL .
+
+      - name: Vulnerability DB Scan
+        run: trivy sbom --exit-code 1 --severity HIGH,CRITICAL .
+        
