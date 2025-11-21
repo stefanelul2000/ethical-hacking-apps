@@ -23,18 +23,13 @@ jobs:
       - name: Install Bandit
         run: python3 -m pip install bandit
       - name: Run Bandit
-        run: |
-          bandit -r . -ll -s B104 --severity-level low --confidence-level low \
-            | tee bandit-report.txt
+        run: bandit -r . -ll -s B104 | tee bandit-report.txt
       - name: Summarize Bandit findings
         if: always()
         run: |
           {
-            echo "## Bandit Scan";
-            echo;
-            echo "Command: \`bandit -r . -ll -s B104 --severity-level low --confidence-level low\`";
-            echo "Result: ${{ job.status }}";
-            echo;
-            echo "### Output";
-            cat bandit-report.txt;
+            if [ -f bandit-report.txt ]; then
+              cat bandit-report.txt
           } >> $GITHUB_STEP_SUMMARY
+
+
