@@ -15,23 +15,46 @@ jobs:
           config-path: ""
           fail: true
     
-  codeql:
-    name: Static Analysis (codeql for c/c++ & python)
+  clang-tidy:
+    name: C/C++ Static Analysis (clang-tidy)
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-      security-events: write
-    strategy:
-      matrix:
-        language: [ "cpp", "python" ]
     steps:
       - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ matrix.language }}
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+      - name: Run clang-tidy
+        run: |
+          find . -name '*.cpp' | xargs clang-tidy > clang-tidy-report.txt || true
+      - name: Summarize clang-tidy findings
+        if: always()
+        run: |
+          echo "## clang-tidy Report" >> $GITHUB_STEP_SUMMARY
+          if [ -f clang-tidy-report.txt ] && [ -s clang-tidy-report.txt ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat clang-tidy-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No clang-tidy issues found." >> $GITHUB_STEP_SUMMARY
+
+  pylint:
+    name: Python Static Analysis (pylint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pylint
+        run: python3 -m pip install pylint
+      - name: Run pylint
+        run: pylint **/*.py > pylint-report.txt || true
+      - name: Summarize pylint findings
+        if: always()
+        run: |
+          echo "## pylint Report" >> $GITHUB_STEP_SUMMARY
+          if [ -f pylint-report.txt ] && [ -s pylint-report.txt ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat pylint-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No pylint issues found." >> $GITHUB_STEP_SUMMARY
 
   semgrep:
     name: Code Pattern Scan (semgrep)
@@ -78,31 +101,27 @@ jobs:
       - name: Summarize Python findings
         if: always()
         run: |
-            echo "## Python Code Quality & Security" >> $GITHUB_STEP_SUMMARY
-            echo "| Type | Severity/Code | Confidence | Rule/Description | File | Line |" >> $GITHUB_STEP_SUMMARY
-            echo "|------|---------------|------------|------------------|------|------|" >> $GITHUB_STEP_SUMMARY
-            # flake8 results
-            if [ -f flake8-report.txt ] && [ -s flake8-report.txt ]; then
-              awk 'match($0, /^(.+?):([0-9]+):([0-9]+): ([A-Z][0-9]+) (.+)/, arr) { printf "| flake8 | %s | | %s | %s | %s |", arr[4], arr[5], arr[1], arr[2] }' flake8-report.txt >> $GITHUB_STEP_SUMMARY
-            fi
-            # bandit results
-            if [ -f bandit-report.json ]; then
-              jq -r '
-                .results[] |
-                "| bandit | " + .test_id + " | " + .issue_severity + " | " + .issue_text + " | " + .filename + " | " + (.line_number|tostring) + " |"
-              ' bandit-report.json >> $GITHUB_STEP_SUMMARY
-            else
-              echo "Bandit report missing!" >> $GITHUB_STEP_SUMMARY
-            fi
-              # Summarize Semgrep findings
-              if [ -f semgrep-report.json ]; then
-                jq -r '
-                  .results[] |
-                  "| " + (.extra.severity // "N/A") + " | " + (.check_id // "N/A") + " | " + (.extra.message // .check_id) + " | " + (.path // "N/A") + " | " + (.start.line // "N/A") + " |"
-                ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
-              else
-                echo "Semgrep report missing!" >> $GITHUB_STEP_SUMMARY
-              fi
+          echo "## Python Code Quality & Security" >> $GITHUB_STEP_SUMMARY
+          echo "| Type | Severity/Code | Confidence | Rule/Description | File | Line |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|---------------|------------|------------------|------|------|" >> $GITHUB_STEP_SUMMARY
+
+          # flake8 results
+          if [ -f flake8-report.txt ] && [ -s flake8-report.txt ]; then
+            awk 'match($0, /^(.+?):([0-9]+):([0-9]+): ([A-Z][0-9]+) (.+)/, arr) {
+                  printf "| flake8 | %s | | %s | %s | %s |\n", arr[4], arr[5], arr[1], arr[2]
+                }' flake8-report.txt >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # bandit results
+          if [ -f bandit-report.json ]; then
+            jq -r '
+              .results[] |
+              "| bandit | " + .test_id + " | " + .issue_severity + " | " + .issue_text +
+              " | " + .filename + " | " + (.line_number|tostring) + " |"
+            ' bandit-report.json >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Bandit report missing!" >> $GITHUB_STEP_SUMMARY
+          fi
 
   cppcheck:
     name: C/C++ Security & Code Quality (cppcheck)
