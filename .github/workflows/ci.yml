@@ -60,15 +60,9 @@ jobs:
           if [ -f pylint-report.txt ] && [ -s pylint-report.txt ]; then
             echo "| Type | File | Line | Message |" >> $GITHUB_STEP_SUMMARY
             echo "|------|------|------|---------|" >> $GITHUB_STEP_SUMMARY
-            while IFS= read -r line; do
-              if [[ $line =~ ^(.+):([0-9]+):([0-9]+):(.*)$ ]]; then
-                type=${BASH_REMATCH[1]}
-                file=${BASH_REMATCH[2]}
-                line_num=${BASH_REMATCH[3]}
-                message=${BASH_REMATCH[4]}
-                echo "| $type | $file | $line_num | $message |" >> $GITHUB_STEP_SUMMARY
-              fi
-            done < pylint-report.txt
+            awk -F ':' 'match($0, /^([^:]+):([0-9]+):([0-9]+): ([A-Z][0-9]+[A-Z]?): (.+)/, arr) {
+              printf "| %s | %s | %s | %s |\n", arr[4], arr[1], arr[2], arr[5]
+            }' pylint-report.txt >> $GITHUB_STEP_SUMMARY
             tail -n 1 pylint-report.txt >> $GITHUB_STEP_SUMMARY
           else
             echo "No pylint issues found." >> $GITHUB_STEP_SUMMARY
@@ -153,7 +147,7 @@ jobs:
           fi
 
   cppcheck:
-    name: C/C++ Security & Code Quality (cppcheck)
+    name: C/C++ Security Scan & Code Quality (cppcheck)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
