@@ -20,19 +20,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Bandit
         run: python3 -m pip install bandit
-      - name: Run Bandit
-        run: bandit -r . -ll -s B104 | tee bandit-report.txt
+
+      - name: Run Bandit with detailed output
+        run: |
+          bandit -r . -f json -o bandit-report.json || true
+          bandit -r . -f screen
+
       - name: Summarize Bandit findings
         if: always()
         run: |
-          {
-            if [ -f bandit-report.txt ]; then
-              cat bandit-report.txt
-            else
-              echo "bandit-report.txt missing"
-            fi
-          } >> $GITHUB_STEP_SUMMARY
+          echo "## Bandit Security Findings" >> $GITHUB_STEP_SUMMARY
+          cat bandit-report.json >> $GITHUB_STEP_SUMMARY
 
 
