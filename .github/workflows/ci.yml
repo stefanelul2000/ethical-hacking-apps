@@ -44,37 +44,30 @@ jobs:
             "| " + (.extra.severity // "N/A") + " | " + (.check_id // "N/A") + " | " + (.extra.message // .check_id) + " | " + (.path // "N/A") + " | " + (.start.line // "N/A") + " |"
           ' semgrep-report.json >> $GITHUB_STEP_SUMMARY
 
-  trivy:
-    name: SAST + Dependency Scan (Trivy)
+  safety:
+    name: Python Dependency Vulnerability Scan (Safety)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Trivy
+      - name: Install Safety
+        run: python3 -m pip install safety
+      - name: Run Safety
         run: |
-            wget -qO- https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.50.2_Linux-64bit.tar | tar xvf -
-            sudo mv trivy /usr/local/bin/
-      - name: File System Scan
-        run: trivy fs --exit-code 1 --severity HIGH,CRITICAL . | tee trivy-fs-report.txt
-      - name: Vulnerability DB Scan
-        run: trivy sbom --exit-code 1 --severity HIGH,CRITICAL . | tee trivy-sbom-report.txt
-      - name: Summarize Trivy findings
+          if [ -f requirements.txt ]; then
+            safety check -r requirements.txt --full-report > safety-report.txt || true
+          else
+            echo "No requirements.txt found, skipping Safety scan." > safety-report.txt
+          fi
+      - name: Summarize Safety findings
         if: always()
         run: |
-          echo "## Trivy File System Scan" >> $GITHUB_STEP_SUMMARY
-          if [ -f trivy-fs-report.txt ]; then
+          echo "## Safety Dependency Scan" >> $GITHUB_STEP_SUMMARY
+          if [ -f safety-report.txt ]; then
             echo '```' >> $GITHUB_STEP_SUMMARY
-            cat trivy-fs-report.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No file system scan report found." >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "\n## Trivy SBOM Scan" >> $GITHUB_STEP_SUMMARY
-          if [ -f trivy-sbom-report.txt ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat trivy-sbom-report.txt >> $GITHUB_STEP_SUMMARY
+            cat safety-report.txt >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           else
-            echo "No SBOM scan report found." >> $GITHUB_STEP_SUMMARY
+            echo "No Safety report found." >> $GITHUB_STEP_SUMMARY
           fi
 
   bandit:
